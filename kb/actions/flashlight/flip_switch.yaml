@@ -1,7 +1,8 @@
 # Flip Switch Action for Flashlight
 #
 # This action toggles the flashlight's switch to a specified position.
-# It demonstrates conditional effects, precondition logic, and trend setting.
+# The new structured format makes preconditions and effects much more readable
+# and easier to understand for humans authoring knowledge bases.
 #
 # Behavior:
 # - Sets switch to the requested position (on/off)
@@ -17,19 +18,29 @@ parameters:
   to:
     space: ["off", "on"]      # Must be valid switch position
 
-preconditions:
-  # Parameter validation
-  - 'to in ["off","on"]'      # Ensure valid target state
+structured_preconditions:
+  parameter_validation:
+    - parameter: to
+      must_be_in: ["off", "on"]
+      description: "Switch can only be set to off or on"
   
-  # Safety constraint: can't turn on with empty battery
-  - 'to == "on" -> battery_level != "empty"'   # Implication: if turning on, battery must not be empty
+  logic_constraints:
+    - if: 'to == "on"'
+      then: 'battery_level != "empty"'
+      description: "Cannot turn on flashlight with empty battery"
 
-effects:
-  # Primary effect: set switch to requested position
-  - 'switch = to'
+structured_effects:
+  assignments:
+    - component: switch
+      value: to
+      description: "Set switch to requested position"
+    
+    - component: bulb
+      value: '"on" if switch == "on" else "off"'
+      description: "Bulb follows switch state automatically"
   
-  # Secondary effect: bulb follows switch state
-  - 'bulb = "on" if switch == "on" else "off"'
-  
-  # Trend effect: battery drains when light is on
-  - 'battery_level trend = "down" if switch == "on" else "none"'
+  trends:
+    - component: battery_level
+      trend: down
+      condition: 'switch == "on"'
+      description: "Battery drains when light is on"

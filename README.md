@@ -41,11 +41,17 @@ The Mental Models Simulator creates **deterministic, labeled state transitions**
 # Validate knowledge base
 uv run sim validate --acts kb/actions
 
-# Show object definition
+# Show object definition with parts and attributes
 uv run sim show object flashlight --version 1
 
-# Apply action to object
+# Apply single action to object
 uv run sim apply flashlight -v 1 flip_switch -p to=on
+
+# Run action sequence and save simulation
+uv run sim simulate flashlight -v 1 -a "flip_switch:to=on" -a "flip_switch:to=off" -o flashlight_cycle.yaml
+
+# Replay and analyze simulation
+uv run sim replay flashlight_cycle.yaml --step 2 --table
 ```
 
 ---
@@ -87,6 +93,23 @@ uv run sim apply flashlight -v 1 flip_switch -p to=on
 - Boolean logic: `and`, `or`, `not`
 - Conditionals: `value if condition else other_value`
 - Implication sugar: `A -> B` (becomes `(not A) or B`)
+
+### ✅ Phase 2.5 - Enhanced Object Structure & Action Readability (COMPLETE)
+
+**Object Structure Improvements:**
+- **Parts**: Physical components that can be controlled (switch, bulb, power)
+- **Attributes**: Properties and states that are measured (battery_level, temperature)
+- Clear semantic separation with backward compatibility
+
+**Human-Readable Action Format:**
+- **Structured Preconditions**: Clear parameter validation and logic constraints
+- **Structured Effects**: Organized assignments, trends, and stepping operations
+- **Self-Documenting**: Descriptions and readable if-then logic
+- **Legacy Support**: Old DSL format still works alongside new structure
+
+**CLI Commands:**
+- `sim simulate <object> -v <ver> -a "action:param=value" [-o output.yaml]` - Run action sequences
+- `sim replay <simulation.yaml> [--step N] [--table]` - Analyze saved simulations
 
 ### 🔄 Next: Phase 3 - Unknowns & Blocked Outcomes
 
@@ -194,43 +217,83 @@ Action Types → Validation → Engine → State Transitions
 
 ### Object Types
 
-Object types are defined in `kb/objects/*.yaml` files:
+Object types are defined in `kb/objects/*.yaml` files with a clear separation between physical parts and measurable attributes:
 
 ```yaml
 # kb/objects/flashlight.yaml
 type: flashlight
 version: 1
+
+# Physical components that can be directly controlled
+parts:
+  switch:
+    space: ["off", "on"]       # Binary state space
+    mutable: true              # Can be changed by actions
+    default: "off"             # Starts in off position
+  
+  bulb:
+    space: ["off", "on"]       # Binary state space
+    mutable: true              # Controlled by switch state
+    default: "off"             # Starts off (follows switch)
+
+# Properties and states that are measured or tracked
 attributes:
-  switch:        { space: [off, on],                    mutable: true,  default: off }
-  bulb:          { space: [off, on],                    mutable: true,  default: off }
-  battery_level: { space: [empty, low, med, high],     mutable: true,  default: med }
+  battery_level:
+    space: ["empty", "low", "med", "high"]  # Ordered qualitative levels
+    mutable: true              # Decreases over time/use
+    default: "med"             # Starts with medium charge
 ```
 
 **Schema Rules:**
 - `type`: Unique object type name
 - `version`: Integer version (increment on breaking changes)
-- `attributes`: Map of attribute definitions
+- `parts`: Physical components that can be controlled (optional)
+- `attributes`: Properties and states that are measured (optional)
   - `space`: Ordered list of qualitative values (strings)
   - `mutable`: Boolean (default: true)
   - `default`: Default value (must be in space, or first value used)
 
+**Legacy Format:** Objects using only `attributes` (no `parts`) are still fully supported.
+
 ### Actions
 
-Actions are defined in `kb/actions/<object_type>/*.yaml` files:
+Actions are defined in `kb/actions/<object_type>/*.yaml` files with a new human-readable structured format:
 
 ```yaml
 # kb/actions/flashlight/flip_switch.yaml
 action: flip_switch
 object_type: flashlight
+
 parameters:
-  to: { space: [off, on] }
-preconditions:
-  - 'to in ["off","on"]'                    # Parameter validation
-  - 'to == "on" -> battery_level != "empty"' # Logic constraint
-effects:
-  - 'switch = to'                           # Direct assignment
-  - 'bulb = "on" if switch == "on" else "off"' # Conditional
-  - 'battery_level trend = "down" if switch == "on" else "none"' # Trend
+  to:
+    space: ["off", "on"]      # Must be valid switch position
+
+structured_preconditions:
+  parameter_validation:
+    - parameter: to
+      must_be_in: ["off", "on"]
+      description: "Switch can only be set to off or on"
+  
+  logic_constraints:
+    - if: 'to == "on"'
+      then: 'battery_level != "empty"'
+      description: "Cannot turn on flashlight with empty battery"
+
+structured_effects:
+  assignments:
+    - component: switch
+      value: to
+      description: "Set switch to requested position"
+    
+    - component: bulb
+      value: '"on" if switch == "on" else "off"'
+      description: "Bulb follows switch state automatically"
+  
+  trends:
+    - component: battery_level
+      trend: down
+      condition: 'switch == "on"'
+      description: "Battery drains when light is on"
 ```
 
 **Schema Rules:**
@@ -238,8 +301,15 @@ effects:
 - `object_type`: Target object type name
 - `parameters`: Map of parameter specifications
   - `space`: Optional list constraining parameter values
-- `preconditions`: List of DSL expressions (all must be true)
-- `effects`: List of DSL assignments (applied in order)
+- `structured_preconditions`: Human-readable precondition rules
+  - `parameter_validation`: List of parameter validation rules
+  - `logic_constraints`: List of if-then logic constraints
+- `structured_effects`: Organized effect definitions
+  - `assignments`: Component value assignments
+  - `trends`: Trend direction changes
+  - `steps`: Quantity space stepping operations (inc/dec)
+
+**Legacy Format:** Actions using `preconditions` and `effects` (raw DSL) are still fully supported.
 
 ### DSL Expression Reference
 
@@ -355,6 +425,69 @@ sim apply flashlight -v 1 flip_switch -p to=off -s my_state.json
 sim apply complex_object -v 1 multi_param_action -p param1=value1 -p param2=value2
 ```
 
+### `sim simulate`
+
+Run a sequence of actions on an object and save the simulation history.
+
+```bash
+sim simulate OBJECT_NAME --version VERSION [OPTIONS]
+
+Arguments:
+  OBJECT_NAME  Object type name
+  VERSION      Object type version
+
+Options:
+  -a, --action TEXT      Action in format 'action_name:param1=value1,param2=value2' (repeatable)
+  -o, --output PATH      Output simulation file (default: simulation.yaml)
+  -s, --state PATH       Path to initial state JSON (optional)
+  -n, --name TEXT        Name for the simulation
+  -d, --description TEXT Description of the simulation
+  --stop-on-failure      Stop simulation on first failed action
+  --report/--no-report   Show text report after simulation (default: show)
+  --objs PATH           Path to kb/objects folder
+  --acts PATH           Path to kb/actions folder
+```
+
+**Examples:**
+```bash
+# Simple flashlight on/off cycle
+sim simulate flashlight -v 1 -a "flip_switch:to=on" -a "flip_switch:to=off" -o flashlight_cycle.yaml
+
+# Kettle heating simulation with custom name
+sim simulate kettle -v 1 -a "set_power:to=on" -n "kettle_heating" -d "Test kettle heating process"
+
+# Use custom initial state and stop on first failure
+sim simulate flashlight -v 1 -a "flip_switch:to=on" -s low_battery.json --stop-on-failure
+```
+
+### `sim replay`
+
+Replay and analyze a saved simulation.
+
+```bash
+sim replay SIMULATION_FILE [OPTIONS]
+
+Arguments:
+  SIMULATION_FILE  Path to simulation YAML file
+
+Options:
+  -s, --step INTEGER     Show state at specific step (0=initial, 1=after step 1, etc.)
+  --table               Show state as table at specified step
+  --report/--no-report  Show full text report (default: show)
+```
+
+**Examples:**
+```bash
+# Show full simulation report
+sim replay flashlight_cycle.yaml
+
+# Show state after step 2 as a table
+sim replay simulation.yaml --step 2 --table
+
+# Show only specific step without full report
+sim replay simulation.yaml --step 1 --no-report
+```
+
 **State JSON Format:**
 ```json
 {
@@ -432,16 +565,24 @@ def test_new_object():
 
 ### Adding New Actions
 
-1. Create YAML file in `kb/actions/<object_type>/`:
+1. Create YAML file in `kb/actions/<object_type>/` using the new structured format:
 ```yaml
 action: new_action
 object_type: existing_object
 parameters:
   param: { space: [option1, option2] }
-preconditions:
-  - 'param in ["option1", "option2"]'
-effects:
-  - 'target_attr = param'
+
+structured_preconditions:
+  parameter_validation:
+    - parameter: param
+      must_be_in: ["option1", "option2"]
+      description: "Parameter must be valid option"
+
+structured_effects:
+  assignments:
+    - component: target_attr
+      value: param
+      description: "Set target attribute to parameter value"
 ```
 
 2. Validate and test:
@@ -451,6 +592,38 @@ uv run sim apply existing_object -v 1 new_action -p param=option1
 ```
 
 3. Add comprehensive tests covering success and failure cases.
+
+### Working with Simulations
+
+Simulations provide a powerful way to test action sequences and analyze state progressions:
+
+1. **Create simulation:**
+```bash
+uv run sim simulate flashlight -v 1 -a "flip_switch:to=on" -a "flip_switch:to=off" -o test_cycle.yaml
+```
+
+2. **Analyze results:**
+```bash
+# Full report
+uv run sim replay test_cycle.yaml
+
+# Specific state inspection
+uv run sim replay test_cycle.yaml --step 1 --table
+
+# Compare states
+python -c "
+from tests.test_sequence_simulation import create_test_flashlight_simulation, compare_simulation_states
+sim = create_test_flashlight_simulation()
+compare_simulation_states(sim, 0, 2)
+"
+```
+
+3. **Simulation files** contain complete state transition history in YAML format:
+   - Initial state and object type information
+   - Step-by-step action applications with parameters
+   - State diffs and transition results
+   - Success/failure status and error reasons
+   - Human-readable timestamps and descriptions
 
 ---
 

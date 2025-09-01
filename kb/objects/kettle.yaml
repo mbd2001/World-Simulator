@@ -1,8 +1,8 @@
 # Electric Kettle Object Type Definition
 #
-# This defines an electric kettle that heats water. It demonstrates
-# qualitative temperature progression and the relationship between
-# power state and heating processes.
+# This defines an electric kettle with physical parts (power switch) 
+# and measurable attributes (temperature, water level). The new structure 
+# clearly separates controllable components from measurable properties.
 #
 # Key behaviors modeled:
 # - Power switch controls heating element
@@ -13,13 +13,16 @@
 type: kettle
 version: 1
 
-attributes:
+# Physical components that can be directly controlled
+parts:
   # Power switch for the heating element
   power:
     space: ["off", "on"]       # Binary power state
     mutable: true              # Can be toggled by user
     default: "off"             # Starts unpowered for safety
 
+# Properties and states that are measured or tracked
+attributes:
   # Water temperature using qualitative levels
   temperature:
     space: ["cold", "warm", "hot", "boiling"]  # Progressive heating states

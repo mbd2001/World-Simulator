@@ -118,43 +118,65 @@ def _parse_object_type(data: Dict[str, Any], source: str) -> ObjectType:
     except (ValueError, TypeError) as e:
         raise ValueError(f"{source}: 'version' must be a positive integer") from e
     
-    # Parse attributes section
+    # Parse parts section (optional)
+    parts_raw = data.get("parts", {})
+    if not isinstance(parts_raw, dict):
+        raise ValueError(f"{source}: 'parts' must be a mapping")
+    
+    # Parse attributes section (optional, but backward compatible with old format)
     attrs_raw = data.get("attributes", {})
     if not isinstance(attrs_raw, dict):
         raise ValueError(f"{source}: 'attributes' must be a mapping")
-    if not attrs_raw:
-        raise ValueError(f"{source}: 'attributes' cannot be empty - objects must have at least one attribute")
+    
+    # Backward compatibility: if no parts/attributes distinction, treat all as attributes
+    if not parts_raw and attrs_raw and "parts" not in data:
+        # Legacy format - all components are in attributes section
+        pass
+    
+    # Ensure object has at least one part or attribute
+    if not parts_raw and not attrs_raw:
+        raise ValueError(f"{source}: object must have at least one part or attribute")
+    
+    # Parse each part
+    parts: Dict[str, AttributeType] = {}
+    for part_name, part_spec in parts_raw.items():
+        try:
+            part = _parse_component(part_name, part_spec, name, source, "part")
+            parts[part_name] = part
+        except Exception as e:
+            raise ValueError(f"{source}: error in part '{part_name}': {e}") from e
     
     # Parse each attribute
     attributes: Dict[str, AttributeType] = {}
     for attr_name, attr_spec in attrs_raw.items():
         try:
-            attribute = _parse_attribute(attr_name, attr_spec, name, source)
+            attribute = _parse_component(attr_name, attr_spec, name, source, "attribute")
             attributes[attr_name] = attribute
         except Exception as e:
             raise ValueError(f"{source}: error in attribute '{attr_name}': {e}") from e
     
-    return ObjectType(name=name, version=version, attributes=attributes)
+    return ObjectType(name=name, version=version, parts=parts, attributes=attributes)
 
 
-def _parse_attribute(attr_name: str, spec: Dict[str, Any], object_name: str, source: str) -> AttributeType:
+def _parse_component(component_name: str, spec: Dict[str, Any], object_name: str, source: str, component_type: str) -> AttributeType:
     """
-    Parse a single attribute definition from YAML data.
+    Parse a single component (part or attribute) definition from YAML data.
     
     Args:
-        attr_name: Name of the attribute
-        spec: Attribute specification from YAML
+        component_name: Name of the component
+        spec: Component specification from YAML
         object_name: Name of the parent object type
         source: Source file path for error reporting
+        component_type: Type of component ("part" or "attribute") for error messages
         
     Returns:
         Validated AttributeType instance
         
     Raises:
-        ValueError: If the attribute specification is invalid
+        ValueError: If the component specification is invalid
     """
     if not isinstance(spec, dict):
-        raise ValueError("attribute specification must be a mapping")
+        raise ValueError(f"{component_type} specification must be a mapping")
     
     # Parse space (required)
     if "space" not in spec:
@@ -172,7 +194,7 @@ def _parse_attribute(attr_name: str, spec: Dict[str, Any], object_name: str, sou
         raise ValueError(f"'space' values must be unique, got: {levels}")
     
     # Create quantity space
-    space_name = f"{object_name}.{attr_name}"
+    space_name = f"{object_name}.{component_name}"
     space = QuantitySpace(name=space_name, levels=levels)
     
     # Parse mutability (optional, defaults to True)
@@ -189,7 +211,7 @@ def _parse_attribute(attr_name: str, spec: Dict[str, Any], object_name: str, sou
             raise ValueError(f"default value {default!r} not in space {levels}")
     
     return AttributeType(
-        name=attr_name,
+        name=component_name,
         space=space,
         mutable=mutable,
         default=default

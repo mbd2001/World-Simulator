@@ -32,7 +32,9 @@ class ActionEngine:
 
         ctx = {**state.values, **params}
 
-        for cond in action.preconditions:
+        # Use effective preconditions (converts structured to DSL if needed)
+        effective_preconditions = action.get_effective_preconditions()
+        for cond in effective_preconditions:
             try:
                 ok = bool(eval_expr(cond, ctx))
             except Exception as e:
@@ -45,25 +47,27 @@ class ActionEngine:
         new_state = copy.deepcopy(state)
         diffs: List[DiffEntry] = []
 
-        for eff in action.effects:
+        # Use effective effects (converts structured to DSL if needed)
+        effective_effects = action.get_effective_effects()
+        for eff in effective_effects:
             eff = eff.strip()
             if not eff:
                 continue
 
             m = _INCDEC_RE.match(eff)
             if m:
-                attr = m.group("attr")
+                component = m.group("attr")
                 op = m.group("op")
-                if attr not in self.obj_type.attributes:
+                if not self.obj_type.has_component(component):
                     return TransitionResult(before=state, after=None, status="rejected",
-                                            reason=f"Unknown attribute in effect: {attr}")
-                attr_type = self.obj_type.attributes[attr]
-                old = new_state.values[attr]
+                                            reason=f"Unknown component in effect: {component}")
+                component_type = self.obj_type.get_component(component)
+                old = new_state.values[component]
                 direction = "up" if op == "inc" else "down"
-                new = attr_type.space.step(old, direction)
+                new = component_type.space.step(old, direction)
                 if new != old:
-                    diffs.append(DiffEntry(attribute=attr, before=old, after=new, kind="value"))
-                    new_state.values[attr] = new
+                    diffs.append(DiffEntry(attribute=component, before=old, after=new, kind="value"))
+                    new_state.values[component] = new
                 continue
 
             m = _ASSIGN_RE.match(eff)
@@ -74,10 +78,10 @@ class ActionEngine:
 
             tm = _TREND_TARGET_RE.match(lhs)
             if tm:
-                attr = tm.group("attr")
-                if attr not in self.obj_type.attributes:
+                component = tm.group("attr")
+                if not self.obj_type.has_component(component):
                     return TransitionResult(before=state, after=None, status="rejected",
-                                            reason=f"Unknown attribute in trend target: {attr}")
+                                            reason=f"Unknown component in trend target: {component}")
                 try:
                     val = eval_expr(rhs, ctx)
                 except Exception as e:
@@ -86,16 +90,16 @@ class ActionEngine:
                 if val not in ("up","down","none"):
                     return TransitionResult(before=state, after=None, status="rejected",
                                             reason=f"Invalid trend value: {val!r}")
-                old = new_state.trends.get(attr, "none")
+                old = new_state.trends.get(component, "none")
                 if old != val:
-                    diffs.append(DiffEntry(attribute=f"{attr}.trend", before=old, after=val, kind="trend"))
-                    new_state.trends[attr] = val
+                    diffs.append(DiffEntry(attribute=f"{component}.trend", before=old, after=val, kind="trend"))
+                    new_state.trends[component] = val
                 continue
 
-            attr = lhs
-            if attr not in self.obj_type.attributes:
+            component = lhs
+            if not self.obj_type.has_component(component):
                 return TransitionResult(before=state, after=None, status="rejected",
-                                        reason=f"Unknown attribute in effect: {attr}")
+                                        reason=f"Unknown component in effect: {component}")
             try:
                 val = eval_expr(rhs, ctx)
             except Exception as e:
@@ -103,16 +107,17 @@ class ActionEngine:
                                         reason=f"Effect eval error: {eff!r}: {e}")
             if not isinstance(val, str):
                 return TransitionResult(before=state, after=None, status="rejected",
-                                        reason=f"Effect must assign string to attribute {attr}, got {val!r}")
-            space = self.obj_type.attributes[attr].space
+                                        reason=f"Effect must assign string to component {component}, got {val!r}")
+            component_type = self.obj_type.get_component(component)
+            space = component_type.space
             if not space.has(val):
                 return TransitionResult(before=state, after=None, status="rejected",
                                         reason=f"Assigned value {val!r} not in space {space.levels!r}")
-            old = new_state.values[attr]
+            old = new_state.values[component]
             if old != val:
-                diffs.append(DiffEntry(attribute=attr, before=old, after=val, kind="value"))
-                new_state.values[attr] = val
+                diffs.append(DiffEntry(attribute=component, before=old, after=val, kind="value"))
+                new_state.values[component] = val
 
-            ctx[attr] = val
+            ctx[component] = val
 
         return TransitionResult(before=state, after=new_state, status="ok", diff=diffs)
