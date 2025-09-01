@@ -13,7 +13,7 @@ Key concepts:
 """
 
 from __future__ import annotations
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional, Union, Any
 from pydantic import BaseModel, field_validator
 from .state import ObjectState, Trend
 
@@ -52,23 +52,134 @@ class ParamSpec(BaseModel):
             )
 
 
+class ParameterValidation(BaseModel):
+    """
+    Structured parameter validation rule.
+    
+    Attributes:
+        parameter: Name of the parameter to validate
+        must_be_in: List of allowed values for the parameter
+        description: Optional human-readable description
+    """
+    parameter: str
+    must_be_in: List[str]
+    description: Optional[str] = None
+
+
+class LogicConstraint(BaseModel):
+    """
+    Structured logic constraint with readable if-then format.
+    
+    Attributes:
+        if_condition: The condition that triggers this constraint
+        then_constraint: The constraint that must hold if condition is true
+        description: Human-readable description of the constraint
+    """
+    if_condition: str = ""  # Empty means always applies
+    then_constraint: str
+    description: Optional[str] = None
+
+
+class StructuredPreconditions(BaseModel):
+    """
+    Structured preconditions with clear organization.
+    
+    Attributes:
+        parameter_validation: List of parameter validation rules
+        logic_constraints: List of logical constraints
+        raw_expressions: Fallback to raw DSL expressions for complex cases
+    """
+    parameter_validation: List[ParameterValidation] = []
+    logic_constraints: List[LogicConstraint] = []
+    raw_expressions: List[str] = []
+
+
+class AssignmentEffect(BaseModel):
+    """
+    Structured assignment effect.
+    
+    Attributes:
+        component: Name of the component to modify
+        value: Expression for the new value
+        description: Human-readable description
+    """
+    component: str
+    value: str
+    description: Optional[str] = None
+
+
+class TrendEffect(BaseModel):
+    """
+    Structured trend effect.
+    
+    Attributes:
+        component: Name of the component whose trend to modify
+        trend: New trend direction ("up", "down", "none")
+        condition: Optional condition for when this trend applies
+        description: Human-readable description
+    """
+    component: str
+    trend: Literal["up", "down", "none"]
+    condition: Optional[str] = None
+    description: Optional[str] = None
+
+
+class StepEffect(BaseModel):
+    """
+    Structured stepping effect (inc/dec in quantity space).
+    
+    Attributes:
+        component: Name of the component to step
+        direction: Direction to step ("up" for inc, "down" for dec)
+        condition: Optional condition for when this step applies
+        description: Human-readable description
+    """
+    component: str
+    direction: Literal["up", "down"]
+    condition: Optional[str] = None
+    description: Optional[str] = None
+
+
+class StructuredEffects(BaseModel):
+    """
+    Structured effects with clear organization.
+    
+    Attributes:
+        assignments: List of assignment effects
+        trends: List of trend effects
+        steps: List of stepping effects
+        raw_expressions: Fallback to raw DSL expressions for complex cases
+    """
+    assignments: List[AssignmentEffect] = []
+    trends: List[TrendEffect] = []
+    steps: List[StepEffect] = []
+    raw_expressions: List[str] = []
+
+
 class ActionType(BaseModel):
     """
     Definition of an action that can be applied to objects.
     
     ActionType defines a parameterized operation that can modify object states.
-    It includes parameter specifications, preconditions that must be met,
-    and effects that describe the state changes.
+    It supports both legacy format (raw DSL) and new structured format for
+    better human readability.
     
     Attributes:
         name: Unique action name within the object type
         object_type: Name of the object type this action applies to
         version: Action version (increment for breaking changes)
         parameters: Dictionary of parameter specifications
+        
+        # Legacy format (backward compatibility)
         preconditions: List of DSL expressions that must evaluate to True
         effects: List of DSL statements that modify the object state
         
+        # New structured format (preferred)
+        structured_preconditions: Structured precondition rules
+        structured_effects: Structured effect definitions
+        
     Examples:
+        >>> # Legacy format
         >>> flip_action = ActionType(
         ...     name="flip_switch",
         ...     object_type="flashlight",
@@ -76,13 +187,27 @@ class ActionType(BaseModel):
         ...     preconditions=['to in ["off","on"]', 'to == "on" -> battery_level != "empty"'],
         ...     effects=['switch = to', 'bulb = "on" if switch == "on" else "off"']
         ... )
+        >>> 
+        >>> # New structured format
+        >>> flip_action_new = ActionType(
+        ...     name="flip_switch",
+        ...     object_type="flashlight",
+        ...     structured_preconditions=StructuredPreconditions(...),
+        ...     structured_effects=StructuredEffects(...)
+        ... )
     """
     name: str
     object_type: str
     version: int = 1
     parameters: Dict[str, ParamSpec] = {}
+    
+    # Legacy format (backward compatibility)
     preconditions: List[str] = []
     effects: List[str] = []
+    
+    # New structured format (preferred)
+    structured_preconditions: Optional[StructuredPreconditions] = None
+    structured_effects: Optional[StructuredEffects] = None
 
     @field_validator("name")
     @classmethod
@@ -136,6 +261,91 @@ class ActionType(BaseModel):
         # Validate each parameter value
         for param_name, value in params.items():
             self.parameters[param_name].validate_value(value)
+
+    def get_effective_preconditions(self) -> List[str]:
+        """
+        Get the effective preconditions as DSL expressions.
+        
+        If structured preconditions are available, convert them to DSL.
+        Otherwise, use the legacy preconditions list.
+        
+        Returns:
+            List of DSL precondition expressions
+        """
+        if self.structured_preconditions:
+            return self._convert_structured_preconditions_to_dsl()
+        return self.preconditions
+
+    def get_effective_effects(self) -> List[str]:
+        """
+        Get the effective effects as DSL expressions.
+        
+        If structured effects are available, convert them to DSL.
+        Otherwise, use the legacy effects list.
+        
+        Returns:
+            List of DSL effect expressions
+        """
+        if self.structured_effects:
+            return self._convert_structured_effects_to_dsl()
+        return self.effects
+
+    def _convert_structured_preconditions_to_dsl(self) -> List[str]:
+        """Convert structured preconditions to DSL expressions."""
+        dsl_expressions = []
+        
+        if self.structured_preconditions:
+            # Convert parameter validations
+            for param_val in self.structured_preconditions.parameter_validation:
+                space_str = '", "'.join(param_val.must_be_in)
+                dsl_expressions.append(f'{param_val.parameter} in ["{space_str}"]')
+            
+            # Convert logic constraints
+            for constraint in self.structured_preconditions.logic_constraints:
+                if constraint.if_condition:
+                    # If-then constraint: convert to implication
+                    dsl_expressions.append(f'{constraint.if_condition} -> {constraint.then_constraint}')
+                else:
+                    # Always constraint
+                    dsl_expressions.append(constraint.then_constraint)
+            
+            # Add raw expressions
+            dsl_expressions.extend(self.structured_preconditions.raw_expressions)
+        
+        return dsl_expressions
+
+    def _convert_structured_effects_to_dsl(self) -> List[str]:
+        """Convert structured effects to DSL expressions."""
+        dsl_expressions = []
+        
+        if self.structured_effects:
+            # Convert assignments
+            for assignment in self.structured_effects.assignments:
+                dsl_expressions.append(f'{assignment.component} = {assignment.value}')
+            
+            # Convert trends
+            for trend in self.structured_effects.trends:
+                if trend.condition:
+                    trend_expr = f'{trend.component} trend = "{trend.trend}" if {trend.condition} else "none"'
+                else:
+                    trend_expr = f'{trend.component} trend = "{trend.trend}"'
+                dsl_expressions.append(trend_expr)
+            
+            # Convert steps
+            for step in self.structured_effects.steps:
+                if step.condition:
+                    # For conditional steps, we need to use conditional assignment
+                    # This is a bit complex, so for now we'll use raw expressions
+                    direction_word = "inc" if step.direction == "up" else "dec"
+                    dsl_expressions.append(f'# Conditional step: {step.component} {direction_word} if {step.condition}')
+                else:
+                    direction_word = "inc" if step.direction == "up" else "dec"
+                    dsl_expressions.append(f'{step.component} {direction_word}')
+            
+            # Add raw expressions
+            dsl_expressions.extend(self.structured_effects.raw_expressions)
+        
+        return dsl_expressions
 
     def __str__(self) -> str:
         """Human-readable string representation."""

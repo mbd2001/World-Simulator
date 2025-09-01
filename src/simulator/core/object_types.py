@@ -24,23 +24,29 @@ class ObjectType(BaseModel):
     """
     Schema definition for a type of object in the simulation.
     
-    ObjectType defines what attributes an object has, their value spaces,
+    ObjectType defines what parts and attributes an object has, their value spaces,
     and how to create default instances. It serves as the template from
     which ObjectState instances are created.
+    
+    The new structure distinguishes between:
+    - Parts: Physical components that can be controlled (e.g., switch, bulb)
+    - Attributes: Properties or states (e.g., battery_level, temperature)
     
     Attributes:
         name: Unique identifier for this object type
         version: Schema version number (increment for breaking changes)
+        parts: Dictionary mapping part names to their definitions
         attributes: Dictionary mapping attribute names to their definitions
         
     Examples:
         >>> from simulator.core.quantity import QuantitySpace
         >>> from simulator.core.attributes import AttributeType
         >>> 
-        >>> # Define attribute types
+        >>> # Define parts (physical components)
         >>> switch_space = QuantitySpace(name="switch", levels=["off", "on"])
-        >>> switch_attr = AttributeType(name="switch", space=switch_space, default="off")
+        >>> switch_part = AttributeType(name="switch", space=switch_space, default="off")
         >>> 
+        >>> # Define attributes (properties/states)
         >>> battery_space = QuantitySpace(name="battery", levels=["empty", "low", "med", "high"])
         >>> battery_attr = AttributeType(name="battery_level", space=battery_space, default="med")
         >>> 
@@ -48,110 +54,152 @@ class ObjectType(BaseModel):
         >>> flashlight = ObjectType(
         ...     name="flashlight",
         ...     version=1,
-        ...     attributes={
-        ...         "switch": switch_attr,
-        ...         "battery_level": battery_attr
-        ...     }
+        ...     parts={"switch": switch_part},
+        ...     attributes={"battery_level": battery_attr}
         ... )
     """
     name: str
     version: int
-    attributes: Dict[str, AttributeType]
+    parts: Dict[str, AttributeType] = {}
+    attributes: Dict[str, AttributeType] = {}
 
-    @field_validator("attributes")
+    @field_validator("parts", "attributes")
     @classmethod
-    def _validate_non_empty_attributes(cls, v: Dict[str, AttributeType]) -> Dict[str, AttributeType]:
+    def _validate_object_has_components(cls, v: Dict[str, AttributeType], info) -> Dict[str, AttributeType]:
         """
-        Ensure that object types have at least one attribute.
+        Ensure that object types have at least one part or attribute.
         
         Args:
-            v: Dictionary of attributes to validate
+            v: Dictionary of parts or attributes to validate
+            info: Validation context information
             
         Returns:
-            The validated attributes dictionary
+            The validated dictionary
             
         Raises:
-            ValueError: If attributes dictionary is empty
+            ValueError: If the object has no parts and no attributes
         """
-        if not v:
-            raise ValueError("ObjectType.attributes cannot be empty - objects must have at least one attribute")
+        # We'll check the total at model level
         return v
+
+    def model_post_init(self, __context) -> None:
+        """Post-initialization validation to ensure object has at least one component."""
+        if not self.parts and not self.attributes:
+            raise ValueError("ObjectType must have at least one part or attribute")
 
     def default_state(self) -> "ObjectState":
         """
         Create a default state instance for this object type.
         
-        Uses each attribute's effective default value (explicit default if set,
-        otherwise the first value in the attribute's quantity space).
+        Uses each part and attribute's effective default value (explicit default if set,
+        otherwise the first value in the quantity space).
         
         Returns:
-            ObjectState with all attributes set to their default values
+            ObjectState with all parts and attributes set to their default values
             
         Examples:
             >>> flashlight_type = ObjectType(...)  # Assume defined above
             >>> default_state = flashlight_type.default_state()
             >>> print(default_state.values)
-            {'switch': 'off', 'battery_level': 'med'}
+            {'switch': 'off', 'bulb': 'off', 'battery_level': 'med'}
         """
         values = {}
+        # Add default values for all parts
+        for part_name, part in self.parts.items():
+            values[part_name] = part.get_effective_default()
+        # Add default values for all attributes
         for attr_name, attr in self.attributes.items():
             values[attr_name] = attr.get_effective_default()
         # Import here to avoid circular dependency
         from simulator.core.state import ObjectState
         return ObjectState(object_type=self, values=values)
 
-    def has_attribute(self, attr_name: str) -> bool:
+    def has_component(self, component_name: str) -> bool:
         """
-        Check if this object type has a specific attribute.
+        Check if this object type has a specific part or attribute.
         
         Args:
-            attr_name: Name of the attribute to check
+            component_name: Name of the part or attribute to check
             
         Returns:
-            True if the attribute exists, False otherwise
+            True if the component exists, False otherwise
         """
-        return attr_name in self.attributes
+        return component_name in self.parts or component_name in self.attributes
+
+    def has_attribute(self, attr_name: str) -> bool:
+        """
+        Check if this object type has a specific attribute (backward compatibility).
+        
+        Args:
+            attr_name: Name of the component to check
+            
+        Returns:
+            True if the component exists (part or attribute), False otherwise
+        """
+        return self.has_component(attr_name)
+
+    def get_component(self, component_name: str) -> AttributeType:
+        """
+        Get a part or attribute definition by name.
+        
+        Args:
+            component_name: Name of the part or attribute to retrieve
+            
+        Returns:
+            The AttributeType for the specified component
+            
+        Raises:
+            KeyError: If the component doesn't exist
+        """
+        if component_name in self.parts:
+            return self.parts[component_name]
+        elif component_name in self.attributes:
+            return self.attributes[component_name]
+        else:
+            raise KeyError(f"Component '{component_name}' not found in object type '{self.name}'")
 
     def get_attribute(self, attr_name: str) -> AttributeType:
         """
-        Get an attribute definition by name.
+        Get an attribute definition by name (backward compatibility).
         
         Args:
-            attr_name: Name of the attribute to retrieve
+            attr_name: Name of the component to retrieve
             
         Returns:
-            The AttributeType for the specified attribute
+            The AttributeType for the specified component
             
         Raises:
-            KeyError: If the attribute doesn't exist
+            KeyError: If the component doesn't exist
         """
-        if attr_name not in self.attributes:
-            raise KeyError(f"Attribute '{attr_name}' not found in object type '{self.name}'")
-        return self.attributes[attr_name]
+        return self.get_component(attr_name)
 
     def validate_state_values(self, values: Dict[str, str]) -> None:
         """
-        Validate that a set of attribute values is compatible with this object type.
+        Validate that a set of component values is compatible with this object type.
         
         Args:
-            values: Dictionary mapping attribute names to values
+            values: Dictionary mapping component names to values
             
         Raises:
-            ValueError: If any attribute is missing, unknown, or has invalid values
+            ValueError: If any component is missing, unknown, or has invalid values
         """
-        # Check for missing required attributes
-        missing_attrs = set(self.attributes.keys()) - set(values.keys())
-        if missing_attrs:
-            raise ValueError(f"Missing required attributes: {sorted(missing_attrs)}")
+        # Get all expected component names (parts + attributes)
+        all_components = set(self.parts.keys()) | set(self.attributes.keys())
         
-        # Check for unknown attributes
-        unknown_attrs = set(values.keys()) - set(self.attributes.keys())
-        if unknown_attrs:
-            raise ValueError(f"Unknown attributes for {self.name}: {sorted(unknown_attrs)}")
+        # Check for missing required components
+        missing_components = all_components - set(values.keys())
+        if missing_components:
+            raise ValueError(f"Missing required components: {sorted(missing_components)}")
         
-        # Validate each attribute value
-        for attr_name, value in values.items():
-            self.attributes[attr_name].validate_value(value)
+        # Check for unknown components
+        unknown_components = set(values.keys()) - all_components
+        if unknown_components:
+            raise ValueError(f"Unknown components for {self.name}: {sorted(unknown_components)}")
+        
+        # Validate each component value
+        for component_name, value in values.items():
+            component = self.get_component(component_name)
+            component.validate_value(value)
 
     def get_identifier(self) -> str:
         """
@@ -164,13 +212,20 @@ class ObjectType(BaseModel):
 
     def __str__(self) -> str:
         """Human-readable string representation."""
+        part_count = len(self.parts)
         attr_count = len(self.attributes)
-        attr_names = ", ".join(self.attributes.keys())
-        return f"ObjectType({self.get_identifier()}: {attr_count} attributes [{attr_names}])"
+        total_count = part_count + attr_count
+        components = []
+        if self.parts:
+            components.extend(f"{name}(part)" for name in self.parts.keys())
+        if self.attributes:
+            components.extend(f"{name}(attr)" for name in self.attributes.keys())
+        component_str = ", ".join(components)
+        return f"ObjectType({self.get_identifier()}: {total_count} components [{component_str}])"
 
     def __repr__(self) -> str:
         """Detailed string representation for debugging."""
         return (
             f"ObjectType(name='{self.name}', version={self.version}, "
-            f"attributes={list(self.attributes.keys())})"
+            f"parts={list(self.parts.keys())}, attributes={list(self.attributes.keys())})"
         )

@@ -1,8 +1,8 @@
 # Flashlight Object Type Definition
 #
-# This defines a basic flashlight with a switch, bulb, and battery.
-# It demonstrates core concepts like binary states (on/off) and 
-# qualitative levels (empty/low/med/high).
+# This defines a basic flashlight with physical parts (switch, bulb) 
+# and attributes (battery level). The new structure clearly separates
+# controllable components from measurable properties.
 #
 # Key behaviors modeled:
 # - Switch controls bulb state
@@ -12,7 +12,8 @@
 type: flashlight
 version: 1
 
-attributes:
+# Physical components that can be directly controlled
+parts:
   # Physical switch that can be toggled
   switch:
     space: ["off", "on"]       # Binary state space
@@ -25,6 +26,8 @@ attributes:
     mutable: true              # Controlled by switch state
     default: "off"             # Starts off (follows switch)
 
+# Properties and states that are measured or tracked
+attributes:
   # Battery charge level using qualitative values
   battery_level:
     space: ["empty", "low", "med", "high"]  # Ordered qualitative levels

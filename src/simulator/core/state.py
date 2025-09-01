@@ -79,44 +79,50 @@ class ObjectState(BaseModel):
             # During construction, object_type might not be set yet
             return v
             
-        # Ensure all required attributes are present
-        for attr_name, attr in obj_type.attributes.items():
-            if attr_name not in v:
-                raise ValueError(f"Missing value for required attribute '{attr_name}'")
+        # Get all expected components (parts + attributes)
+        all_components = {}
+        all_components.update(obj_type.parts)
+        all_components.update(obj_type.attributes)
+        
+        # Ensure all required components are present
+        for component_name, component in all_components.items():
+            if component_name not in v:
+                raise ValueError(f"Missing value for required component '{component_name}'")
             
-            # Validate value is in attribute's quantity space
-            if not attr.space.has(v[attr_name]):
+            # Validate value is in component's quantity space
+            if not component.space.has(v[component_name]):
                 raise ValueError(
-                    f"Attribute '{attr_name}' has invalid value {v[attr_name]!r}. "
-                    f"Must be one of: {attr.space.levels}"
+                    f"Component '{component_name}' has invalid value {v[component_name]!r}. "
+                    f"Must be one of: {component.space.levels}"
                 )
         
-        # Check for unknown attributes
-        for attr_name in v.keys():
-            if attr_name not in obj_type.attributes:
+        # Check for unknown components
+        for component_name in v.keys():
+            if component_name not in all_components:
+                all_component_names = list(all_components.keys())
                 raise ValueError(
-                    f"Unknown attribute '{attr_name}' for object type '{obj_type.name}'. "
-                    f"Valid attributes: {list(obj_type.attributes.keys())}"
+                    f"Unknown component '{component_name}' for object type '{obj_type.name}'. "
+                    f"Valid components: {all_component_names}"
                 )
         
         return v
 
-    def get_value(self, attr_name: str) -> str:
+    def get_value(self, component_name: str) -> str:
         """
-        Get the current value of an attribute.
+        Get the current value of a component (part or attribute).
         
         Args:
-            attr_name: Name of the attribute to retrieve
+            component_name: Name of the component to retrieve
             
         Returns:
-            Current value of the attribute
+            Current value of the component
             
         Raises:
-            KeyError: If the attribute doesn't exist
+            KeyError: If the component doesn't exist
         """
-        if attr_name not in self.values:
-            raise KeyError(f"Attribute '{attr_name}' not found in state")
-        return self.values[attr_name]
+        if component_name not in self.values:
+            raise KeyError(f"Component '{component_name}' not found in state")
+        return self.values[component_name]
 
     def get_trend(self, attr_name: str) -> Trend:
         """

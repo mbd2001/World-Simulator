@@ -1,8 +1,8 @@
 # Set Power Action for Electric Kettle
 #
-# This action controls the kettle's power switch. It's a simple
-# binary control action that demonstrates basic parameter validation
-# and direct attribute assignment.
+# This action controls the kettle's power switch using the new structured format.
+# The readable structure makes it easy to understand parameter validation
+# and effects without parsing complex DSL expressions.
 #
 # Behavior:
 # - Sets power switch to the requested position (on/off)
@@ -17,16 +17,23 @@ parameters:
   to:
     space: ["off", "on"]      # Must be valid power state
 
-preconditions:
-  # Parameter validation
-  - 'to in ["off","on"]'      # Ensure valid target state
+structured_preconditions:
+  parameter_validation:
+    - parameter: to
+      must_be_in: ["off", "on"]
+      description: "Power can only be set to off or on"
   
-  # Note: Future versions might add safety checks like:
-  # - 'to == "on" -> water_level != "empty"'  # Don't heat empty kettle
+  # Note: Future versions might add safety checks in logic_constraints:
+  # logic_constraints:
+  #   - if: 'to == "on"'
+  #     then: 'water_level != "empty"'
+  #     description: "Don't heat empty kettle for safety"
 
-effects:
-  # Primary effect: set power to requested state
-  - 'power = to'
+structured_effects:
+  assignments:
+    - component: power
+      value: to
+      description: "Set power switch to requested state"
   
   # Note: Temperature changes will be handled by environment rules
   # in Phase 4, which will gradually increase temperature when
